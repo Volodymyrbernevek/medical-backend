@@ -132,5 +132,4 @@ def delete_me(
 # 5. Отримання профілю поточного користувача
 @router.get("/me", response_model=schemas.UserResponse)
 def get_current_user_profile(current_user: models.User = Depends(get_current_user)):
-
     return current_user
