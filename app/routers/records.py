@@ -23,6 +23,7 @@ cloudinary.config(
     secure=True,
 )
 
+
 # 1. Створення картки хвороби (Доступно тільки Пацієнту для себе)
 @router.post("/cases", response_model=schemas.MedicalCaseResponse)
 def create_medical_case(
@@ -74,7 +75,6 @@ async def upload_file_to_case(
         raise HTTPException(
             status_code=404, detail="Медичний випадок не знайдено або доступ заборонено"
         )
-
 
     try:
         upload_result = cloudinary.uploader.upload(file.file, resource_type="auto")
@@ -192,7 +192,8 @@ def get_transparent_logs(
     return formatted_logs
 
 
-# 6. Редагування картки хвороби (Тільки власник-пацієнт)
+# 6. Редагування картки хвороби (Доступно пацієнту-власнику ТА будь-якому лікарю)
+# ОНОВЛЕНО: Лікар тепер має повне право змінювати будь-який кейс
 @router.put("/cases/{case_id}", response_model=schemas.MedicalCaseResponse)
 def update_medical_case(
     case_id: int,
@@ -201,10 +202,18 @@ def update_medical_case(
     db: Session = Depends(get_db),
 ):
     case = db.query(models.MedicalCase).filter(models.MedicalCase.id == case_id).first()
-    if not case or case.patient_id != current_user.id:
+    if not case:
+        raise HTTPException(status_code=404, detail="Медичний випадок не знайдено")
+
+    # Перевірка доступу:
+    # Якщо це пацієнт (role_id == 1) і кейс належить не йому — викидаємо помилку 403
+    if current_user.role_id == 1 and case.patient_id != current_user.id:
         raise HTTPException(
             status_code=403, detail="У вас немає прав на редагування цього запису"
         )
+
+    # Якщо це лікар (role_id == 2) — перевірка вище ігнорується,
+    # і він може редагувать дані хвороби
 
     for key, value in case_data.model_dump(exclude_unset=True).items():
         setattr(case, key, value)
@@ -228,5 +237,43 @@ def delete_medical_case(
         )
 
     db.delete(case)
+    db.commit()
+    return None
+
+
+# 8. Видалення окремого медичного файлу/фото пацієнтом
+@router.delete("/records/{record_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_medical_record(
+    record_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role_id != 1:
+        raise HTTPException(
+            status_code=403, detail="Тільки пацієнти можуть видаляти свої файли"
+        )
+
+    # Шукаємо запис про файл у базі даних
+    record = (
+        db.query(models.MedicalRecord)
+        .filter(models.MedicalRecord.id == record_id)
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="Файл не знайдено")
+
+    # Перевіряємо, чи цей файл належить саме цьому пацієнту через зв'язок з MedicalCase
+    case = (
+        db.query(models.MedicalCase)
+        .filter(models.MedicalCase.id == record.case_id)
+        .first()
+    )
+    if not case or case.patient_id != current_user.id:
+        raise HTTPException(
+            status_code=403, detail="Ви не маєте доступу до видалення цього файлу"
+        )
+
+    # Видаляємо запис з бази даних
+    db.delete(record)
     db.commit()
     return None
