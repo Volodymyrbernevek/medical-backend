@@ -223,7 +223,8 @@ def update_medical_case(
     return case
 
 
-# 7. Видалення картки хвороби (Тільки власник-пацієнт)
+# 7. Видалення картки хвороби (Доступно пацієнту-власнику ТА будь-якому лікарю)
+# ОНОВЛЕНО: Лікар тепер теж може видалити будь-який медичний випадок
 @router.delete("/cases/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_medical_case(
     case_id: int,
@@ -231,18 +232,28 @@ def delete_medical_case(
     db: Session = Depends(get_db),
 ):
     case = db.query(models.MedicalCase).filter(models.MedicalCase.id == case_id).first()
-    if not case or case.patient_id != current_user.id:
+    if not case:
+        raise HTTPException(status_code=404, detail="Медичний випадок не знайдено")
+
+    # Перевірка доступу:
+    # Якщо це пацієнт (role_id == 1) і він намагається видалити ЧУЖИЙ кейс — блокуємо
+    if current_user.role_id == 1 and case.patient_id != current_user.id:
         raise HTTPException(
             status_code=403, detail="У вас немає прав на видалення цього запису"
         )
 
+    # Якщо це лікар (role_id == 2) — перевірка вище пропускається,
+    # і він може видалити кейс
+
+    # Оскільки ми видаляємо весь кейс, правильним кроком буде також видалити
+    # всі пов'язані з цим кейсом медичні файли (якщо вони є)
     db.delete(case)
     db.commit()
     return None
 
 
 # 8. Видалення окремого медичного файлу/фото пацієнтом
-@router.delete("/records/{record_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{record_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_medical_record(
     record_id: int,
     current_user: models.User = Depends(get_current_user),
